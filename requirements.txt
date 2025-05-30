@@ -1,5 +1,5 @@
-llama-index>=0.10.20
-google-generativeai>=0.3.2
+llama-index>=0.12.37
+google_genai>=1.14.0
 fastapi
 uvicorn
 pydantic
