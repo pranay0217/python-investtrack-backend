@@ -1,10 +1,8 @@
-llama-index>=0.12.34
-google_genai>=1.14.0
+google-generativeai
 fastapi
 uvicorn
 pydantic
 httpx
 python-dotenv
 pymongo
-llama-index-llms-google
 
