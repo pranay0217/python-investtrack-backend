@@ -7,7 +7,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from pymongo import MongoClient
 from fastapi.middleware.cors import CORSMiddleware
-from llama_index.llms.google_genai import GoogleGenAI
+from llama_index.llms.google import GoogleGenAI
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
