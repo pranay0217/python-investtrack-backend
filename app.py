@@ -7,6 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 import google.generativeai as genai
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+import json
+from datetime import datetime
+import http.client
 
 # Load environment variables
 load_dotenv()
@@ -16,29 +19,27 @@ app = FastAPI()
 # CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://investtrack-4xgu.onrender.com"],
+    allow_origins=["https://investtrack-4xgu.onrender.com"],  # Update this as needed
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # MongoDB connection
-client = MongoClient(os.getenv("MONGODB_URI", "mongodb+srv://Pranay:Pranay_1702@cluster0.kmroz8s.mongodb.net/INVESTTRACK?retryWrites=true&w=majority&appName=Cluster0"))
+client = MongoClient(os.getenv("MONGODB_URI"))
 db = client["INVESTTRACK"]
 angelone_collection = db["Holdings"]
 zerodha_collection = db["holdings"]
 
-# Initialize Google Gemini
+# Initialize Google Gemini LLM
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 llm1 = genai.GenerativeModel("gemini-2.0-flash")
 
-# Request schema
 class AuthData(BaseModel):
     username: str
     clientcode: str
     token: str
 
-# Custom error handler for validation errors
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(
@@ -46,10 +47,8 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         content={"detail": exc.errors(), "body": await request.json()},
     )
 
-# Fetch and store holdings
 @app.post("/fetch_portfolio")
 def fetch_and_store_holdings(data: AuthData):
-    print("Started")
     username = data.username
     clientcode = data.clientcode
     token = data.token
@@ -78,20 +77,22 @@ def fetch_and_store_holdings(data: AuthData):
 
         parsed_data = json.loads(response_data)
         new_holdings = parsed_data.get("data", [])
-        print("Sending Portfolio")
 
-        # Update in Holdings collection using username and broker
+        # Update AngelOne holdings in MongoDB
         angelone_collection.update_one(
             {"username": username, "broker": "angelone"},
             {
                 "$set": {
                     "holdings": new_holdings,
                     "last_updated": now,
-                    "username": username
+                    "username": username,
+                    "broker": "angelone"
                 }
             },
             upsert=True
         )
+
+        # TODO: Add fetching Zerodha holdings here if you want (similar pattern)
 
         return {
             "success": True,
@@ -103,49 +104,51 @@ def fetch_and_store_holdings(data: AuthData):
         print(f"Exception: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
-# Analyze holdings
+
 @app.get("/analyze")
 def analyze_holdings(username: str):
     try:
-        record_angelone = angelone_collection.find_one({"username": username})
+        # Fetch holdings from both brokers (if exist)
+        record_angelone = angelone_collection.find_one({"username": username, "broker": "angelone"})
         record_zerodha = zerodha_collection.find_one({"username": username})
 
-        if not record_angelone or "holdings" not in record_angelone:
+        holdings_angelone = []
+        holdings_zerodha = []
+
+        if record_angelone and "holdings" in record_angelone:
+            # AngelOne's holdings are nested in "holdings" key inside holdings
+            holdings_angelone = record_angelone["holdings"].get("holdings", []) if isinstance(record_angelone["holdings"], dict) else record_angelone["holdings"]
+
+        if record_zerodha and "holdings" in record_zerodha:
+            holdings_zerodha = record_zerodha["holdings"]
+
+        if not holdings_angelone and not holdings_zerodha:
             return {
                 "success": False,
-                "message": "No AngelOne holdings found.",
+                "message": "No holdings found for the user.",
                 "data": None
             }
 
-        if not record_zerodha or "holdings" not in record_zerodha:
-            return {
-                "success": False,
-                "message": "No Zerodha holdings found.",
-                "data": None
-            }
+        combined_holdings = []
+        if holdings_angelone:
+            combined_holdings.append({"broker": "angelone", "holdings": holdings_angelone})
+        if holdings_zerodha:
+            combined_holdings.append({"broker": "zerodha", "holdings": holdings_zerodha})
 
-        holdings_angelone = record_angelone["holdings"]["holdings"]  # Accessing the inner "holdings" list
-        holdings_zerodha = record_zerodha["holdings"]  # Zerodha has a simpler structure
-
-        combined_holdings = [
-            {"broker": "angelone", "holdings": holdings_angelone},
-            {"broker": "zerodha", "holdings": holdings_zerodha}
-        ]
-
-        # Flatten all holdings for analysis with quantity, avg price, and profit/loss
+        # Flatten holdings for LLM input
         flattened_holdings = []
         for broker_data in combined_holdings:
-            # Check for the correct structure of holdings for each broker
-            if "holdings" in broker_data and isinstance(broker_data["holdings"], list):
-                for h in broker_data["holdings"]:
-                    # Calculate profit/loss for AngelOne and Zerodha
+            broker = broker_data["broker"]
+            holdings_list = broker_data["holdings"]
+
+            if isinstance(holdings_list, list):
+                for h in holdings_list:
                     investment_value = float(h.get("investment_value", 0)) if 'investment_value' in h else 0
                     current_value = float(h.get("current_value", 0)) if 'current_value' in h else 0
                     profit_loss = current_value - investment_value
 
-                    # Adding data to flattened holdings list
                     holding = {
-                        "broker": broker_data["broker"],
+                        "broker": broker,
                         "name": h.get("tradingsymbol", "Unknown"),
                         "quantity": float(h.get("quantity", 0)),
                         "avg_price": float(h.get("averageprice", h.get("average_price", 0))),
@@ -153,7 +156,7 @@ def analyze_holdings(username: str):
                     }
                     flattened_holdings.append(holding)
 
-        # LLM Prompt (Custom Financial Advisor Prompt)
+        # Prepare LLM prompt with flattened holdings
         analysis_prompt = f"""
 You are a financial advisor AI in an investment app.
 Based on the user's current holdings, compare each fund with a better alternative if available.
@@ -173,10 +176,10 @@ holdings = {json.dumps(flattened_holdings, indent=2)}
 
 Your task is to analyze if a better-performing fund (with equal or lower risk and equal or higher trust score) exists for each holding.
 Present the comparison in the format above.
-Just return the answer only on the given format nothing else should be concluded in the asnwer.
+Just return the answer only on the given format nothing else should be concluded in the answer.
         """
 
-        # Call LLM for analysis
+        # Call the LLM for analysis
         response = llm1.complete(analysis_prompt)
 
         return {
@@ -191,4 +194,3 @@ Just return the answer only on the given format nothing else should be concluded
     except Exception as e:
         print(f"Error during LLM completion: {e}")
         raise HTTPException(status_code=500, detail="AI analysis failed")
-        
