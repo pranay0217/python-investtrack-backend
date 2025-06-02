@@ -6,3 +6,5 @@ pydantic
 httpx
 python-dotenv
 pymongo
+llama-index-llms-google
+
