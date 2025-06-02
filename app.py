@@ -1,13 +1,10 @@
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
-import http.client
-import json
 import os
-from datetime import datetime
 from dotenv import load_dotenv
 from pymongo import MongoClient
 from fastapi.middleware.cors import CORSMiddleware
-from llama_index.llms.google import GoogleGenAI
+import google.generativeai as genai
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -16,26 +13,24 @@ load_dotenv()
 
 app = FastAPI()
 
-# Add middleware for CORS
+# CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["https://investtrack-4xgu.onrender.com"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # MongoDB connection
-client = MongoClient(os.getenv("MONGODB_URI", "mongodb://localhost:27017/"))
-db = client["investtrack"]
+client = MongoClient(os.getenv("MONGODB_URI", "mongodb+srv://Pranay:Pranay_1702@cluster0.kmroz8s.mongodb.net/INVESTTRACK?retryWrites=true&w=majority&appName=Cluster0"))
+db = client["INVESTTRACK"]
 angelone_collection = db["Holdings"]
-zerodha_collection = db["holdings"]  # Assuming this might be used later
+zerodha_collection = db["holdings"]
 
-# Initialize LLM
-llm1 = GoogleGenAI(
-    model="gemini-2.0-flash",
-    api_key=os.getenv("GOOGLE_API_KEY")
-)
+# Initialize Google Gemini
+genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+llm1 = genai.GenerativeModel("gemini-2.0-flash")
 
 # Request schema
 class AuthData(BaseModel):
