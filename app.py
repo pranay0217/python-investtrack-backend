@@ -180,7 +180,7 @@ Just return the answer only on the given format nothing else should be concluded
         """
 
         # Call the LLM for analysis
-        response = llm1.complete(analysis_prompt)
+        response = llm1.generate_content(analysis_prompt)
 
         return {
             "success": True,
